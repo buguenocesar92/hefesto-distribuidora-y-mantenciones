@@ -1,0 +1,8 @@
+HEFESTO — Distribuidora y Mantenciones
+
+Cada carpeta contiene código completo, cliente portable compilado, Docker, SQL Supabase, guías y exportador de preparación para Odoo. Leer README.md y docs/INSTALACION.md de cada proyecto.
+
+Distribuidora: https://hefesto-distribuidora.cbm3lla.chatgpt.site
+Mantenciones: consultar URL entregada en el chat.
+
+No incluye credenciales ni datos reales. Supabase requiere proyecto y clave propios. Odoo requiere mapeo y validación de importación en destino. No se probó Docker ni conexión a un Supabase real. QA visual pendiente. Cinco pruebas automáticas por proyecto y compilaciones pasaron. Si despliegas ambos en el mismo servidor, asigna dominios y puertos de host distintos.
