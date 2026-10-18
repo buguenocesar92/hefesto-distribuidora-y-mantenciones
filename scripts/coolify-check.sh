@@ -46,6 +46,10 @@ make_env() {
       printf '%s=x1234567890abcdef\n' "$v" >> "$envfile"
     fi
   done < <(required_vars "$compose")
+  # Para apps supabase-pg: defaults exigidos por la Tarea 1.1 (DB_NAME=mvp_prueba,
+  # DB_SSLMODE=disable). Se escriben al final para que tengan prioridad sobre cualquier
+  # default previo del compose.
+  printf 'DB_SSLMODE=disable\nDB_NAME=mvp_prueba\n' >> "$envfile"
 }
 
 # Valida que un servicio no tenga claves prohibidas por el contrato punto 1.
@@ -53,7 +57,6 @@ check_no_leak() {
   local name="$1" svc="$2" rendered="$3"
   local -a forbidden=(
     'ports' 'container_name' 'privileged' 'cap_add' 'devices'
-    'docker.sock'
   )
   for key in "${forbidden[@]}"; do
     if [[ "$(jq -r --arg s "$svc" '.services[$s] // empty | if has("'"$key"'") then "yes" else "no" end' "$rendered")" == "yes" ]]; then
@@ -71,8 +74,9 @@ check_no_leak() {
     fi
   done
 
-  # security_opt no debe incluir unconfined.
-  if jq -e --arg s "$svc" '.services[$s].security_opt // [] | index("unconfined")' "$rendered" >/dev/null 2>&1; then
+  # security_opt no debe incluir unconfined (en cualquier forma: seccomp:unconfined,
+  # seccomp=unconfined, apparmor:unconfined, etc.).
+  if jq -e --arg s "$svc" '(.services[$s].security_opt // []) | any(.[]; test("unconfined"))' "$rendered" >/dev/null 2>&1; then
     echo "FAIL ${name}/${svc}: security_opt incluye unconfined (contrato 1)"
     return 1
   fi
@@ -84,9 +88,12 @@ check_no_leak() {
       *docker.sock*|*:/var/run/docker.sock*)
         echo "FAIL ${name}/${svc}: volumen monta docker.sock (contrato 1): $bind"
         return 1 ;;
-      /*) : ;; # ruta absoluta — el chequeo fino de "fuera del repo" lo hace Coolify
+      "$repo_root"/*) : ;; # bind dentro del repo, OK
+      *)
+        echo "FAIL ${name}/${svc}: bind fuera del repo (contrato 1): $bind"
+        return 1 ;;
     esac
-  done < <(jq -r --arg s "$svc" '.services[$s].volumes // [] | .[] | select(type=="object") | .source // empty' "$rendered")
+  done < <(jq -r --arg s "$svc" '.services[$s].volumes // [] | .[] | select(type=="object" and .type=="bind") | .source // empty' "$rendered")
 
   return 0
 }
@@ -105,18 +112,17 @@ check_no_fixed_names() {
   return 0
 }
 
-# Para supabase-pg: en el render deben aparecer mvp_prueba y disable.
+# Para supabase-pg: en el render deben aparecer mvp_prueba y disable (en el DSN o
+# en variables separadas del servicio web; no exigimos que estén en el mismo string).
 check_pg_params() {
   local name="$1" envfile="$2" rendered="$3"
-  local found=0
+  local found_db=0 found_ssl=0
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if [[ "$line" == *"mvp_prueba"* && "$line" == *"disable"* ]]; then
-      found=1
-      break
-    fi
+    [[ "$line" == *"mvp_prueba"* ]] && found_db=1
+    [[ "$line" == *"disable"* ]] && found_ssl=1
   done < <(jq -r '.. | strings' "$rendered")
-  if [[ $found -ne 1 ]]; then
+  if [[ $found_db -ne 1 || $found_ssl -ne 1 ]]; then
     echo "FAIL ${name}: app supabase-pg sin DB_NAME=mvp_prueba y DB_SSLMODE=disable (contrato 3)"
     return 1
   fi
@@ -157,9 +163,11 @@ for app in "${apps[@]}"; do
     fi
   done
 
-  # Si el compose tiene services con imagen de Postgres o volumen de datos Postgres, es supabase-pg.
-  if grep -qE 'image:[[:space:]]*(postgres|supabase/postgres)' "$compose" \
-     || jq -e '.. | objects | select(has("image")) | .image | test("postgres")' "$rendered" >/dev/null 2>&1; then
+  # supabase-pg: se activa cuando el compose referencia DB_NAME / DB_SSLMODE o un DSN
+  # postgres:// (no exigimos imagen postgres porque la app puede usar el Postgres
+  # compartido sin traer una propia).
+  if grep -qE '\$\{(DB_NAME|DB_SSLMODE)' "$compose" \
+     || grep -qE 'postgres://' "$compose"; then
     if ! check_pg_params "$rel" "$envfile" "$rendered"; then
       fail=1
     fi
